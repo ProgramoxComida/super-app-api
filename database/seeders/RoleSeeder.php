@@ -14,8 +14,8 @@ class RoleSeeder extends Seeder
      */
     public function run()
     {
-        Role::create(['name' => 'Negocio', 'guard_name' => 'api']);
-        Role::create(['name' => 'Emprendedor', 'guard_name' => 'api']);
-        Role::create(['name' => 'Cuentahabiente', 'guard_name' => 'api']);
+        Role::create(['name' => 'Invitado', 'guard_name' => 'api']);
+        Role::create(['name' => 'Libreton', 'guard_name' => 'api']);
+        Role::create(['name' => 'MiPyme', 'guard_name' => 'api']);
     }
 }

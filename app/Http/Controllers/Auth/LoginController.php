@@ -3,13 +3,18 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
+use App\Models\User;
+use GuzzleHttp\Client;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\{Auth, Validator};
+use Illuminate\Validation\ValidationException;
+use Laravel\Passport\Client as OClient;
 
 class LoginController extends Controller
 {
     /**
      * @OA\Post(
-     *     path="/api/v1/sign-in",
+     *     path="/sign-in",
      *     operationId="login",
      *     tags={"Auth"},
      *     summary="Auth",
@@ -52,26 +57,20 @@ class LoginController extends Controller
      * )
      */
     public function login(Request $request) {
-        // Log::info($request->all());
         try {
-            $credentials = $request->validate([
+            $validator = Validator::make($request->all(), [
                 'user' => ['required'],
                 'password' => ['required'],
             ], [
                 'required' => 'El campo :attribute es requerido.'
             ]);
 
-            if (!Auth::attempt($credentials)) {
-                if (!$request->has('user') || $request->input('user') == '') {
-                    throw new \Exception("Campo de usuario vacio");
-                }
-                if (!$request->has('password') || $request->input('password') == '') {
-                    throw new \Exception("Campo contraseña vacio");
-                }
+            if ($validator->fails()) {
+                throw new ValidationException($validator->errors());
             }
 
             $user = User::where('email', $request['user'])
-                ->orwhere('nickname', $request['user'])
+                ->orwhere('username', $request['user'])
                 ->orwhere('phone', $request['user'])
                 ->firstOrFail();
 
@@ -80,18 +79,14 @@ class LoginController extends Controller
                 throw new \Exception('Contraseña incorrecta');
             }
 
-            $token = $user->createToken('auth_token')->plainTextToken;
+            $oClient = OClient::where('password_client', 1)->first();
+            return $this->getTokenAndRefreshToken($oClient, request('email'), request('password'), true);
 
-            return response()->json([
-                'access_token' => $token,
-                'token_type' => 'Bearer',
-                'expires_in' => 60 * 24 * 7
-            ]);
         } catch (ModelNotFoundException $ex) {
             Log::error($ex);
             return response()->json([
                 'error' => 'Hubo un error, verifica tu usuario y/o contraseña'
-            ], 400);
+            ], 401);
         } catch (ValidationException $ex) {
             return response()->json([
                 'status' => false,
@@ -104,5 +99,30 @@ class LoginController extends Controller
                 'error' => $ex->getMessage()
             ], 400);
         }
+    }
+
+    private function getTokenAndRefreshToken(OClient $oClient, $email, $password, $isLogin = false) {
+        $oClient = OClient::where('password_client', 1)->first();
+        $http = new Client;
+        $userRole = null;
+
+        if($isLogin) {
+            $user = Auth::user();
+            $userRole = $user->role()->first();
+        }
+
+        $response = $http->request('POST', env('OAUTH_APP_URL'), [
+            'form_params' => [
+                'grant_type' => 'password',
+                'client_id' => $oClient->id,
+                'client_secret' => $oClient->secret,
+                'username' => $email,
+                'password' => $password,
+                'scope' => (null !== $userRole) ? $userRole->role : 'Invitado',
+            ],
+        ]);
+
+        $result = json_decode((string) $response->getBody(), true);
+        return response()->json($result, $this->successStatus);
     }
 }

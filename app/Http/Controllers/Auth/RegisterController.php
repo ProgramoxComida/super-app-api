@@ -3,10 +3,18 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
+use App\Traits\UploadTrait;
+use App\Models\{User, UserProfile};
 use Illuminate\Http\Request;
+use Laravel\Passport\Client as OClient;
+use Validator;
+use Exception;
+use GuzzleHttp\Client;
+use Illuminate\Support\Facades\Auth;
 
 class RegisterController extends Controller
 {
+    use UploadTrait;
     /**
      * @OA\Post(
      *     path="/api/v1/sign-up",
@@ -25,6 +33,11 @@ class RegisterController extends Controller
      *                      description="Email",
      *                      type="string",
      *                      format="email"
+     *                  ),
+     *                  @OA\Property(
+     *                      property="username",
+     *                      description="Username",
+     *                      type="string"
      *                  ),
      *                  @OA\Property(
      *                      property="password",
@@ -68,8 +81,8 @@ class RegisterController extends Controller
      *                      property="type",
      *                      description="Indica el tipo de cuenta a crear",
      *                      type="string",
-     *                      enum={"Negocio", "Emprendedor", "Cuentahabiente"},
-     *                      default="Cuentahabiente"
+     *                      enum={"Invitado", "Libreton", "MiPyme"},
+     *                      default="Invitado"
      *                  ),
      *              )
      *          )
@@ -93,36 +106,83 @@ class RegisterController extends Controller
      */
     public function register(Request $request) {
         // Log::info($request->all());
-        $validation = $request->validate([
-            'email' => 'required|string|email|max:255|unique:users',
-            'password' => 'required|string|min:8'
+        try {
+            $validator = Validator::make($request->all(), [
+                'email' => 'required|email|unique:users',
+                'username' => 'unique:users',
+                'password' => 'required',
+                'phone' => 'required|same:password',
+                'first_name' => 'required',
+                'first_last_name' => 'required',
+                'second_last_name' => 'required',
+                'birthdate' => 'required',
+                'sex' => 'required',
+                'type' => 'required',
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json(['error'=>$validator->errors()], 400);
+            }
+            $type = $request->input('type', 'Cuentahabiente');
+            // creando usuario
+            $password = $request->password;
+            $iuser = $request->only('email', 'phone', 'password', 'username');
+            $iuser['password'] = bcrypt($iuser['password']);
+            $user = User::create($iuser);
+
+            // creando perfil
+            $data = $request->only( 'first_name', 'first_last_name', 'second_last_name', 'birthdate', 'sex');
+            $filePath = $this->uploadUserPhoto($request, $user->username, 'photo');
+            $data = array_merge($data, ['users_id' => $user->id, 'photo' => $filePath]);
+            // Log::info($data);
+            UserProfile::create($data);
+            switch($type) {
+                case 'Libreton':
+                    $user->assignRole('Libreton');
+                    break;
+                case 'MiPyme':
+                    $user->assignRole('MiPyme');
+                    break;
+                default:
+                    $user->assignRole('Invitado');
+                    break;
+            }
+
+            // oauth
+            $oClient = OClient::where('password_client', 1)->first();
+            return $this->getTokenAndRefreshToken($oClient, $user->email, $password);
+        } catch(Exception $ex) {
+            Log::error($ex);
+            return response()->json([
+                'error' => 'Ocurrio un error, por favor vuelva a intentar o intente mas tarde.'
+            ], 400);
+        }
+
+    }
+
+    private function getTokenAndRefreshToken(OClient $oClient, $email, $password, $isLogin = false) {
+        $oClient = OClient::where('password_client', 1)->first();
+        $http = new Client;
+        $userRole = null;
+
+        if($isLogin) {
+            $user = Auth::user();
+            $userRole = $user->role()->first();
+        }
+
+        $response = $http->request('POST', env('OAUTH_APP_URL'), [
+            'form_params' => [
+                'grant_type' => 'password',
+                'client_id' => $oClient->id,
+                'client_secret' => $oClient->secret,
+                'username' => $email,
+                'password' => $password,
+                'scope' => (null !== $userRole) ? $userRole->role : 'Invitado',
+            ],
         ]);
-        // Build username
-        preg_match('/([^@]+)/', $validation['email'], $output_array);
-        Log::info( $output_array);
-        $username = $output_array[0].'#'.mt_rand();
 
-        $user = User::create([
-            'username' => $username, //'username_'.$validation['email'][],
-            'email' => $validation['email'],
-            'password' => Hash::make($validation['password'])
-        ]);
-
-        $data = $request->only( 'last_name', 'birthdate', 'sex', 'bio', 'phone');
-        // $data['users_id'] = $user->id;
-        $filePath = $this->uploadUserPhoto($request, $user->username, 'photo');
-        $data = array_merge($data, ['first_name' => $request->input('name'), 'users_id' => $user->id, 'image_profile' => $filePath]);
-        // Log::info($data);
-        UserProfile::create($data);
-
-        $user->assignRole('Administrator');
-
-        // $token = $user->createToken('auth_token')->plainTextToken;
-
-        return response()->json([
-            'status' => true,
-            'message' => 'Usuario creado',
-        ]);
+        $result = json_decode((string) $response->getBody(), true);
+        return response()->json($result, $this->successStatus);
     }
 
 }
