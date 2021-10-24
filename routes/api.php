@@ -2,6 +2,7 @@
 
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Auth\{LoginController, RegisterController, RefreshTokenController};
+use App\Http\Controllers\{UserController};
 /*
 |--------------------------------------------------------------------------
 | API Routes
@@ -17,5 +18,9 @@ Route::prefix('v1')->group(function () {
     Route::post('sign-up', [RegisterController::class, 'register']);
     Route::post('refresh_token', [RefreshTokenController::class, 'refreshToken']);
 
-    // Route::get('/me', [ProfileController::class, 'me'])->middleware('auth:sanctum');
+    Route::get('/me', [UserController::class, 'me'])->middleware('auth:sanctum');
+
+    Route::prefix('mypyme')->group(function () {
+
+    });
 });
